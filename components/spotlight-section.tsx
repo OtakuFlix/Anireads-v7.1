@@ -8,50 +8,85 @@ import Link from "next/link"
 import Image from "next/image"
 import LibraryStatusSelector from "@/components/library/library-status-selector"
 
-// Enhanced API integration with Jikan v4 for better data
-async function getJikanMangaDetails(malId: string) {
+// Enhanced API integration with AniList for banners
+async function getAniListBanner(title: string) {
   try {
-    const response = await fetch(`https://api.jikan.moe/v4/manga/${malId}`)
+    const query = `
+      query ($search: String) {
+        Media (search: $search, type: MANGA) {
+          bannerImage
+          coverImage {
+            extraLarge
+            large
+          }
+        }
+      }
+    `
+    
+    const response = await fetch('https://graphql.anilist.co', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        query,
+        variables: { search: title }
+      })
+    })
+    
     const data = await response.json()
-    return data.data
+    return data.data?.Media?.bannerImage || data.data?.Media?.coverImage?.extraLarge
   } catch (error) {
-    console.error('Error fetching Jikan data:', error)
+    console.warn('Could not fetch AniList banner for', title)
     return null
   }
 }
 
 async function getEnhancedSpotlightData() {
   try {
-    // Get trending manga from MangaDx
-    const mangadxResponse = await fetch('/api/proxy/mangadx/manga?limit=10&order[followedCount]=desc&includes[]=cover_art&contentRating[]=safe&contentRating[]=suggestive')
+    // Get trending manga from MangaDx with faster loading
+    const mangadxResponse = await fetch('/api/proxy/mangadx/manga?limit=6&order[followedCount]=desc&includes[]=cover_art&contentRating[]=safe&contentRating[]=suggestive')
     const mangadxData = await mangadxResponse.json()
     
     if (!mangadxData?.data) return []
 
+    // Process manga in parallel for faster loading
     const enhancedManga = await Promise.all(
-      mangadxData.data.slice(0, 6).map(async (manga: any) => {
+      mangadxData.data.map(async (manga: any) => {
         const title = manga.attributes.title.en || Object.values(manga.attributes.title)[0] || 'Unknown Title'
         
         // Get cover art
         const coverArt = manga.relationships.find((rel: any) => rel.type === 'cover_art')
         const coverUrl = coverArt ? `https://uploads.mangadx.org/covers/${manga.id}/${coverArt.attributes?.fileName}.512.jpg` : null
         
-        // Try to get Kitsu data for additional info
-        let kitsuData = null
-        let jikanData = null
-        
+        // Try to get AniList banner first for better visuals
+        let bannerUrl = null
         try {
-          const kitsuResponse = await fetch(`/api/proxy/kitsu/manga?filter[text]=${encodeURIComponent(title)}&page[limit]=1`)
+          bannerUrl = await getAniListBanner(title)
+        } catch (error) {
+          console.warn('AniList banner fetch failed for', title)
+        }
+        
+        // Try to get Kitsu data for additional info (with timeout)
+        let kitsuData = null
+        try {
+          const controller = new AbortController()
+          const timeoutId = setTimeout(() => controller.abort(), 3000) // 3 second timeout
+          
+          const kitsuResponse = await fetch(`/api/proxy/kitsu/manga?filter[text]=${encodeURIComponent(title)}&page[limit]=1`, {
+            signal: controller.signal
+          })
+          clearTimeout(timeoutId)
+          
           const kitsuResult = await kitsuResponse.json()
           kitsuData = kitsuResult.data?.[0]
           
-          // If we have Kitsu data, try to get MAL ID for Jikan
-          if (kitsuData?.attributes?.slug) {
-            // Search for MAL ID in Kitsu's mappings or use a different approach
-            // For now, we'll use the enhanced data from what we have
+          // If no AniList banner, use Kitsu cover
+          if (!bannerUrl && kitsuData?.attributes?.coverImage?.original) {
+            bannerUrl = kitsuData.attributes.coverImage.original
           }
         } catch (error) {
-          console.warn('Could not fetch additional data for', title)
+          console.warn('Kitsu data fetch failed for', title)
         }
 
         return {
@@ -59,7 +94,7 @@ async function getEnhancedSpotlightData() {
           title,
           description: manga.attributes.description?.en || Object.values(manga.attributes.description || {})[0] || 'No description available.',
           coverUrl: coverUrl || kitsuData?.attributes?.posterImage?.large || '/placeholder.svg',
-          bannerUrl: kitsuData?.attributes?.coverImage?.original || coverUrl || '/placeholder.svg',
+          bannerUrl: bannerUrl || coverUrl || '/placeholder.svg',
           posterUrl: kitsuData?.attributes?.posterImage?.large || '/placeholder.svg',
           status: manga.attributes.status || 'Unknown',
           year: manga.attributes.year || new Date().getFullYear(),
@@ -93,6 +128,7 @@ export default function SpotlightSection() {
   const [currentIndex, setCurrentIndex] = useState(0)
   const [loading, setLoading] = useState(true)
   const [isAnimating, setIsAnimating] = useState(false)
+  const [imageLoaded, setImageLoaded] = useState(false)
 
   useEffect(() => {
     const fetchSpotlightManga = async () => {
@@ -122,6 +158,7 @@ export default function SpotlightSection() {
   const nextSlide = () => {
     if (isAnimating) return
     setIsAnimating(true)
+    setImageLoaded(false)
     setCurrentIndex((prev) => (prev + 1) % spotlightManga.length)
     setTimeout(() => setIsAnimating(false), 500)
   }
@@ -129,6 +166,7 @@ export default function SpotlightSection() {
   const prevSlide = () => {
     if (isAnimating) return
     setIsAnimating(true)
+    setImageLoaded(false)
     setCurrentIndex((prev) => (prev - 1 + spotlightManga.length) % spotlightManga.length)
     setTimeout(() => setIsAnimating(false), 500)
   }
@@ -154,16 +192,19 @@ export default function SpotlightSection() {
 
   return (
     <section className="relative h-[85vh] rounded-3xl overflow-hidden group shadow-2xl shadow-red-900/50">
-      {/* Enhanced Background with better scaling */}
+      {/* Enhanced Background with better scaling and faster loading */}
       <div className="absolute inset-0">
         <Image
           src={currentManga.bannerUrl}
           alt={`${currentManga.title} banner`}
           fill
-          className="object-cover transition-all duration-1000 group-hover:scale-105"
+          className={`object-cover transition-all duration-1000 group-hover:scale-105 ${
+            imageLoaded ? 'opacity-100' : 'opacity-0'
+          }`}
           style={{
             objectPosition: 'center center'
           }}
+          onLoad={() => setImageLoaded(true)}
           unoptimized
           priority
         />
@@ -172,13 +213,6 @@ export default function SpotlightSection() {
         <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-transparent to-black/30" />
         <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-black/90" />
         <div className="absolute inset-0 bg-gradient-to-br from-red-900/20 via-transparent to-purple-900/20" />
-      </div>
-
-      {/* Animated particles */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-20 left-20 w-2 h-2 bg-red-400 rounded-full animate-ping opacity-60"></div>
-        <div className="absolute top-40 right-32 w-1 h-1 bg-yellow-400 rounded-full animate-ping delay-1000 opacity-40"></div>
-        <div className="absolute bottom-32 left-1/3 w-1.5 h-1.5 bg-blue-400 rounded-full animate-ping delay-2000 opacity-50"></div>
       </div>
 
       {/* Content */}
