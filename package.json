@@ -7,7 +7,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "postinstall": "yarn check --verify-tree"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",
@@ -49,7 +50,6 @@
     "lucide-react": "^0.454.0",
     "next": "^14.2.30",
     "next-themes": "^0.4.4",
-    "page-flip": "^2.0.7",
     "react": "18.2.0",
     "react-day-picker": "^9.0.0",
     "react-dom": "18.2.0",
@@ -65,7 +65,6 @@
   },
   "devDependencies": {
     "@types/node": "24.0.0",
-    "@types/page-flip": "^2.0.3",
     "@types/react": "19.1.8",
     "@types/react-dom": "18.2.25",
     "postcss": "^8.5",
@@ -75,5 +74,9 @@
   "engines": {
     "node": ">=18.0.0",
     "yarn": ">=1.22.0"
+  },
+  "resolutions": {
+    "@types/react": "19.1.8",
+    "@types/react-dom": "18.2.25"
   }
 }
